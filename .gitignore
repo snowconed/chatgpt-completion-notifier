@@ -1,0 +1,38 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local development tools
+.codex/
+.agents/
+.idea/
+.vscode/
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated test output
+*.log
+*.tap
+browser-results.json
+tests/browser-results.json
+test-results/
+playwright-report/
+coverage/
+
+# Packaged builds
+dist/
+*.zip
+*.crx
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*:Zone.Identifier

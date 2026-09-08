@@ -1,0 +1,29 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>Local detector fixture — not ChatGPT</title></head>
+<body><main>
+<a id="other-chat" href="/c/other">Other chat</a>
+<section id="thread"><article data-testid="conversation-turn-0"><div data-message-author-role="user" data-message-id="u1">Old prompt</div></article><article data-testid="conversation-turn-1"><div data-message-author-role="assistant" data-message-id="a1">Old answer</div><button data-testid="copy-turn-action-button" aria-label="Copy">Copy</button></article></section>
+<form><div id="prompt-textarea" contenteditable="true" role="textbox">Test question</div><button type="button" id="send" data-testid="send-button" aria-label="Send prompt">Send</button></form>
+</main>
+<script>
+window.fixtureMode="stream";let count=1;
+const thread=document.getElementById("thread"),form=document.querySelector("form"),send=document.getElementById("send");
+function finish(){
+ const article=thread.lastElementChild;const response=article.querySelector('[data-message-author-role="assistant"]');
+ response.textContent="Completed fixture answer "+count;response.className="";
+ const copy=document.createElement("button");copy.dataset.testid="copy-turn-action-button";copy.setAttribute("aria-label","Copy");copy.textContent="Copy";article.append(copy);
+ document.getElementById("stop")?.remove();send.hidden=false;
+}
+function begin(){
+ count++;let a=document.createElement("article");a.dataset.testid="conversation-turn-"+(count*2);
+ const user=document.createElement("div");user.dataset.messageAuthorRole="user";user.dataset.messageId="u"+count;user.textContent="Fixture prompt "+count;a.append(user);thread.append(a);
+ a=document.createElement("article");a.dataset.testid="conversation-turn-"+(count*2+1);const response=document.createElement("div");response.dataset.messageAuthorRole="assistant";response.dataset.messageId="a"+count;response.className="result-streaming";a.append(response);thread.append(a);
+ send.hidden=true;const stop=document.createElement("button");stop.id="stop";stop.type="button";
+ if(window.fixtureMode==="japanese"){stop.setAttribute("aria-label","生成を停止");}else{stop.dataset.testid="stop-button";stop.setAttribute("aria-label","Stop generating");}
+ stop.textContent="Stop";stop.addEventListener("click",finish);form.append(stop);
+ if(window.fixtureMode==="newFast")history.pushState({},"","/c/new-conversation");
+ if(["fast","newFast"].includes(window.fixtureMode))finish();
+}
+send.addEventListener("click",begin);form.addEventListener("submit",e=>e.preventDefault());window.fixtureFinish=finish;
+window.fixtureToken=text=>{thread.lastElementChild.querySelector('[data-message-author-role="assistant"]').textContent=text;};
+document.getElementById("other-chat").addEventListener("click",e=>{e.preventDefault();history.pushState({},"","/c/other");thread.innerHTML='<article><div data-message-author-role="user" data-message-id="other-u">Other prompt</div></article><article><div data-message-author-role="assistant" data-message-id="other-a">Old other answer</div><button data-testid="copy-turn-action-button">Copy</button></article>';document.getElementById("stop")?.remove();send.hidden=false;});
+</script></body></html>

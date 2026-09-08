@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT 完了通知（ローカル）",
+  "version": "1.0.0",
+  "description": "ChatGPTの回答終了を画面から検知し、デスクトップ通知と任意のチャイムでお知らせします。非公式・外部送信なし。",
+  "minimum_chrome_version": "116",
+  "permissions": ["notifications", "storage", "offscreen"],
+  "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {
+    "default_title": "ChatGPT 完了通知",
+    "default_popup": "popup.html",
+    "default_icon": {"16": "assets/icon16.png", "32": "assets/icon32.png", "48": "assets/icon48.png", "128": "assets/icon128.png"}
+  },
+  "icons": {"16": "assets/icon16.png", "32": "assets/icon32.png", "48": "assets/icon48.png", "128": "assets/icon128.png"},
+  "content_scripts": [{
+    "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+    "js": ["shared.js", "detector-core.js", "content.js"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; media-src 'self'; img-src 'self'; style-src 'self'"
+  },
+  "incognito": "not_allowed"
+}

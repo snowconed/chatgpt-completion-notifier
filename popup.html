@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChatGPT 完了通知</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+<header><img src="assets/icon48.png" width="38" height="38" alt=""><div><h1>ChatGPT 完了通知</h1><p>ローカルで動作する非公式拡張</p></div></header>
+<main>
+  <section class="status-card" aria-live="polite"><div class="eyebrow">現在のタブ</div><h2 id="tabStatus">確認しています…</h2><p id="tabHint">ChatGPT のタブを開いてください。</p><div id="permission" class="permission"></div></section>
+  <section class="settings" aria-label="通知設定">
+    <label class="row"><span><strong>通知を有効にする</strong></span><input id="enabled" type="checkbox" role="switch"></label>
+    <label class="row"><span>ChatGPT を見ているときも通知</span><input id="notifyWhenFocused" type="checkbox"></label>
+    <label class="row"><span>完了時にチャイムを鳴らす</span><input id="sound" type="checkbox"></label>
+    <p class="note">チャイムは通知バナーとは別に再生します。<br>Windows の「応答不可」中も鳴る場合があります。</p>
+    <label class="row volume-row" for="volume"><span>音量 <output id="volumeValue">50%</output></span><input id="volume" type="range" min="0" max="100" step="5"></label>
+    <label class="row" for="settleMs"><span>完了判定の待機</span><select id="settleMs"><option value="5000">5秒（標準）</option><option value="8000">8秒</option><option value="12000">12秒（慎重）</option></select></label>
+    <label class="row"><span>通知を長めに表示する</span><input id="keepVisible" type="checkbox"></label>
+    <p class="note">表示時間は Windows / Chrome の制約を受けます。</p>
+    <p id="saved" class="saved" aria-live="polite">設定は自動保存されます。</p>
+  </section>
+  <div class="buttons"><button id="testNotification" class="primary">テスト通知</button><button id="testSound">音だけテスト</button></div>
+  <p id="testResult" class="test-result" role="status">最初に「テスト通知」で通知経路を確認してください。</p>
+  <details id="diagnosticDetails"><summary>診断情報（会話本文なし）</summary><p class="note">送信成功は Chrome の受付を示します。<br>Windows のバナー表示までは確認できません。</p><pre id="diagnostics">読み込み中…</pre><button id="clearLog" class="small">通知ログを消去</button></details>
+  <footer><button id="openGuide" class="link">使い方・通知が出ないとき</button><span>v1.0.0</span></footer>
+</main>
+<script src="shared.js"></script><script src="popup.js"></script>
+</body></html>
