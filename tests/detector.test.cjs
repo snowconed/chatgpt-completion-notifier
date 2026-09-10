@@ -81,6 +81,51 @@ test("text stability alone cannot complete a run without busy or final controls"
   const d=fresh();d.submit(base(),3000);const s=base({signature:"new",finalControls:false});d.tick(s,3100);
   assert.equal(completes(d.tick(s,60000)).length,0);
 });
+test("the reported empty-output diagnostic stays waiting despite final controls", () => {
+  const d=fresh();const s={...stream(d),hasOutput:false,signature:"empty-answer"};d.tick(s,3100);
+  const diagnostic={...done(s),assistantFound:true,stopDetected:false,streamingDetected:false};
+  for (const at of [4000,9000,20000,60000]) {
+    assert.equal(completes(d.tick(diagnostic,at)).length,0);
+    assert.equal(d.phase,"waiting");
+    assert.equal(d.status().active,true);
+  }
+});
+test("a visual-only reply waits five seconds after late final controls and emits once", () => {
+  const d=fresh();const s={...stream(d),visualOnly:true};d.tick(s,3100);
+  const waiting={...done(s),finalControls:false};
+  for (const at of [4000,10000]) {
+    assert.equal(completes(d.tick(waiting,at)).length,0);
+    assert.equal(d.phase,"waiting");
+  }
+  const ready=done(s);
+  assert.equal(completes(d.tick(ready,13000)).length,0);
+  assert.equal(d.phase,"settling");
+  assert.equal(completes(d.tick(ready,17999)).length,0);
+  assert.equal(completes(d.tick(ready,18000)).length,1);
+  assert.equal(completes(d.tick(ready,40000)).length,0);
+});
+test("a visual-only reply requires the composer as well as final controls", () => {
+  const d=fresh();const s={...stream(d),visualOnly:true};d.tick(s,3100);
+  const waiting={...done(s),composerReady:false};
+  for (const at of [4000,10000]) {
+    assert.equal(completes(d.tick(waiting,at)).length,0);
+    assert.equal(d.phase,"waiting");
+  }
+  d.tick(done(s),12000);
+  assert.equal(completes(d.tick(done(s),16999)).length,0);
+  assert.equal(completes(d.tick(done(s),17000)).length,1);
+});
+test("temporary loss of visual readiness restarts the full settling interval", () => {
+  const d=fresh();const s={...stream(d),visualOnly:true};d.tick(s,3100);
+  const ready=done(s);d.tick(ready,4000);assert.equal(d.phase,"settling");
+  assert.equal(completes(d.tick({...ready,finalControls:false},8000)).length,0);
+  assert.equal(d.phase,"waiting");
+  assert.equal(completes(d.tick(ready,10000)).length,0);
+  assert.equal(d.phase,"settling");
+  assert.equal(completes(d.tick(ready,14999)).length,0);
+  assert.equal(completes(d.tick(ready,15000)).length,1);
+  assert.equal(completes(d.tick(ready,25000)).length,0);
+});
 test("visible error ends the run without a success notification", () => {
   const d=fresh();const s=stream(d);d.tick(s,3100);
   assert.equal(completes(d.tick({...done(s),error:true},4000)).length,0);assert.equal(d.phase,"error");

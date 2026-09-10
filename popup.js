@@ -64,7 +64,7 @@ async function refresh() {
     $("permission").textContent = diagnostic?.permission === "granted"
       ? "拡張の通知権限：許可（Windows 側は別設定）" : "拡張の通知権限：拒否／取得できませんでした";
     $("diagnostics").textContent = JSON.stringify({
-      extension: "1.0.0", settings: prefs, currentTab: contentStatus,
+      extension: "1.0.1", settings: prefs, currentTab: contentStatus,
       notificationPermission: diagnostic?.permission, recent: diagnostic?.recent || []
     }, null, 2);
   } catch (error) {

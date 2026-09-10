@@ -4,6 +4,8 @@ Chrome で開いている ChatGPT の回答終了を検知し、デスクトッ�
 
 通常の利用に Python、Node.js、API キーは不要です。Chrome 116 以降に対応し、Chrome ウェブストアには公開していません。
 
+現在のバージョンは **1.0.1** です。図だけの回答で出力を見落とす問題を修正しました。更新後は拡張機能と ChatGPT タブの両方を再読み込みしてください。
+
 ## インストール
 
 1. このリポジトリをダウンロードして解凍するか、`git clone` で取得します。
@@ -26,6 +28,8 @@ Chrome で開いている ChatGPT の回答終了を検知し、デスクトッ�
 - タブを閉じた場合、タブが破棄・凍結された場合、Chrome 終了中や PC スリープ中は監視できません。同じタブで別の会話へ移動すると、元の会話の監視は終了します。
 - Windows アプリ版は対象外です。ChatGPT の画面構造の変更や特殊モードによって、検出できないことがあります。
 
+図だけの回答では、最新の回答欄にある画像・SVG・canvas・埋め込み画面を検出し、親チャットの生成中表示が消えて、回答後の操作ボタンと入力欄が使える状態になってから通知します。本文の横に配置された図にも対応します。埋め込み画面の内部や canvas の描画完了を直接確認する機能ではなく、図の表示場所や画面構造によっては検出できません。
+
 テスト通知も出ない場合は Windows と Chrome の通知設定を確認してください。テスト通知は出るのに回答終了を検出しない場合は、ChatGPT タブを再読み込みし、拡張内の「診断情報（会話本文なし）」を確認してください。
 
 ## プライバシー
@@ -40,15 +44,17 @@ Node.js 24 で、追加パッケージなしに実行できます。
 node --test tests/detector.test.cjs tests/background.test.cjs
 ```
 
-GitHub Actions は push とプルリクエスト時に、Windows と Linux で JavaScript の構文確認と上記 37 項目のテストを実行します。
+GitHub Actions は push とプルリクエスト時に、Windows と Linux で JavaScript の構文確認と上記 41 項目のテストを実行します。Linux では図だけの回答を含む 24 項目のブラウザテストも実行します。
 
-DOM テストは開発者向けの任意の確認です。Python、Playwright、Chromium が別途必要で、ブラウザのパスを指定します。
+DOM テストは開発者向けです。Python 3.12 を用意し、以下の手順で実行できます。
 
 ```sh
-python tests/browser_dom.py --chromium "/path/to/chromium" --report tests/browser-results.json
+python -m pip install -r tests/requirements.txt
+python -m playwright install chromium
+python tests/browser_dom.py --report tests/browser-results.json
 ```
 
-Windows では `--chromium` にインストール済み Chrome / Chromium の実行ファイルのパスを指定してください。DOM テストは GitHub Actions の対象に含めていません。
+既存の Chrome / Chromium を使用する場合は、`--chromium "/path/to/chrome"` で実行ファイルのパスを指定できます。
 
 テストの Chrome 拡張 API は模擬です。実際の Windows 通知・音声出力、ログイン済み ChatGPT の最新画面での動作は別途確認が必要です。配布時の検証記録は [tests/TEST_REPORT.md](tests/TEST_REPORT.md) にあります。
 

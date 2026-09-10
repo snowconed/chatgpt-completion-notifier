@@ -41,7 +41,7 @@
         baselineSignature: base.signature,
         baselineAssistantKey: base.assistantKey,
         lastSignature: snapshot.signature,
-        outputChangedAt: now, quietSince: snapshot.busy ? null : now,
+        outputChangedAt: now, quietSince: snapshot.busy ? null : now, readySince: null,
         sawBusy: Boolean(snapshot.busy),
         sawOutput: Boolean(adopted && snapshot.hasOutput && snapshot.afterUser),
         allowAssignment: source === "submit" && !chatId(base.route)
@@ -112,6 +112,7 @@
       if (s.busy) {
         run.sawBusy = true;
         run.quietSince = null;
+        run.readySince = null;
         this._phase("generating", now);
         return this.drain(); // Text pauses never imply completion while a busy marker remains.
       }
@@ -123,12 +124,19 @@
         return this.drain();
       }
       // Fast replies without an observed stop button require both the composer
-      // and final answer controls. Busy-observed runs accept either ready signal.
-      const ready = run.sawBusy ? (s.composerReady || s.finalControls) : (s.composerReady && s.finalControls);
+      // and final answer controls. Visual-only replies also require both: an
+      // embedded preview can exist long before the parent answer finishes.
+      const ready = run.sawBusy && !s.visualOnly ? (s.composerReady || s.finalControls) : (s.composerReady && s.finalControls);
       const hasCurrentOutput = s.hasOutput && s.afterUser && run.sawOutput;
-      if (hasCurrentOutput && ready) this._phase("settling", now);
-      else this._phase("waiting", now);
+      if (hasCurrentOutput && ready) {
+        if (run.readySince === null) run.readySince = now;
+        this._phase("settling", now);
+      } else {
+        run.readySince = null;
+        this._phase("waiting", now);
+      }
       if (hasCurrentOutput && ready && now - run.quietSince >= this.settleMs
+          && now - run.readySince >= this.settleMs
           && now - run.outputChangedAt >= this.settleMs) {
         this.run = null;
         this._phase("complete", now);

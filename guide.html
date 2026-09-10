@@ -1,7 +1,8 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChatGPT 完了通知｜使い方</title><link rel="stylesheet" href="guide.css"></head>
 <body><main>
-<header><span class="tag">CHROME EXTENSION · v1.0.0 · 2026-09-08</span><h1>回答の終了を、<br>デスクトップで受け取る。</h1><p>ChatGPT 完了通知（ローカル） — 非公式・外部送信なし</p></header>
+<header><span class="tag">CHROME EXTENSION · v1.0.1 · 2026-09-10</span><h1>回答の終了を、<br>デスクトップで受け取る。</h1><p>ChatGPT 完了通知（ローカル） — 非公式・外部送信なし</p></header>
+<section class="note"><h2>v1.0.1 の更新</h2><p>本文を伴わない図や、本文の横にある図を見落とす問題を修正しました。SVG・canvas・埋め込み画面を回答の出力として認識し、親チャットの回答後の操作ボタンと入力欄を確認してから通知します。埋め込み画面内部や canvas 自体の描画完了は直接確認しません。更新後は拡張機能と ChatGPT のタブを両方再読み込みしてください。最新の検証結果は <code>tests/TEST_REPORT.md</code> に記載しています。以下の初回検証記録は v1.0.0 作成時のものです。</p></section>
 <section class="callout"><strong>まずは「テスト通知」を押してください。</strong><p>この拡張は ChatGPT 本体とは別に、Chrome の拡張機能用の通知 API を使います。ただし Windows の通知ブロックを回避するものではありません。テストで通知経路を先に確認できます。</p></section>
 <section><h2>01　インストール</h2><ol>
 <li>ZIP を右クリックし、<strong>「すべて展開」</strong>で解凍します。保存先は後で削除・移動しない場所を選んでください。</li>

@@ -10,7 +10,10 @@
   const STOP_LABEL = /^(?:stop(?: generating| generation| streaming| response)?|生成を停止|生成を中止|応答を停止|回答を停止|回答の生成を停止|停止する|停止)$/i;
   const SEND_LABEL = /^(?:send(?: prompt| message)?|送信|メッセージを送信|プロンプトを送信)$/i;
   const FINAL_LABEL = /^(?:copy(?: response| message)?|good response|bad response|read aloud|コピー|回答をコピー|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
+  const FINAL_VISUAL_LABEL = /^(?:copy (?:response|message)|good response|bad response|read aloud|回答をコピー|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
   const REGEN_LABEL = /^(?:regenerate(?: response)?|try again|再生成|回答を再生成|もう一度試す)$/i;
+  const TURN_SELECTOR = 'article,[data-testid^="conversation-turn-"]';
+  const NON_OUTPUT_SELECTOR = 'button,[role="button"],script,style,template,[hidden],[aria-hidden="true"]';
   let prefs = sanitizeSettings();
   const detector = new CgnCompletionDetector(prefs);
   const documentId = crypto.randomUUID();
@@ -51,16 +54,52 @@
   function composer() {
     return document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],textarea[name="prompt-textarea"]');
   }
+  function latestMessage(scope, role) {
+    // Mix both formats in document order: older text replies must not hide a
+    // newer tool/visual turn which only exposes data-turn.
+    const matches = scope.querySelectorAll(`[data-message-author-role="${role}"],article[data-turn="${role}"],[data-testid^="conversation-turn-"][data-turn="${role}"]`);
+    return matches[matches.length - 1] || null;
+  }
+  function responseText(assistant) {
+    if (!assistant) return "";
+    const copy = assistant.cloneNode(true);
+    // A fallback assistant can itself be the article. Its action labels and
+    // SVG labels are not prose and must not turn an empty reply into output.
+    copy.querySelectorAll(`${NON_OUTPUT_SELECTOR},svg,iframe,canvas,video,audio`).forEach(el => el.remove());
+    return copy.textContent || "";
+  }
+  function responseMedia(turn) {
+    if (!turn) return [];
+    return [...turn.querySelectorAll("img,video,audio,canvas,svg,iframe")].filter(el => {
+      if (!visible(el) || el.closest('script,style,template,[hidden],[aria-hidden="true"]')
+          || el.closest('[data-message-author-role="user"],[data-turn="user"]')) return false;
+      const owner = el.closest(TURN_SELECTOR);
+      if (owner && owner !== turn) return false;
+      const tag = el.tagName.toLowerCase();
+      const bounds = el.getBoundingClientRect();
+      // Exclude small avatars/status icons, including images outside buttons.
+      if (bounds.width < 48 || bounds.height < 48) return false;
+      const control = el.closest('button,[role="button"]');
+      if (control) {
+        // A large result image may itself be an expand/open button. Ordinary
+        // action icons are not outputs, even when their CSS makes them large.
+        if (tag !== "img" || control.matches('[data-testid$="-turn-action-button"]')
+            || labelled(control, FINAL_LABEL) || labelled(control, REGEN_LABEL)
+            || labelled(control, STOP_LABEL) || labelled(control, SEND_LABEL)) return false;
+      }
+      if (tag === "svg" && !el.querySelector("path,rect,circle,ellipse,line,polyline,polygon,text,image,use,foreignObject")) return false;
+      if (tag === "iframe" && !el.getAttribute("srcdoc")?.trim()) {
+        const src = el.getAttribute("src")?.trim();
+        if (!src || src === "about:blank") return false;
+      }
+      return true;
+    });
+  }
   function snapshot() {
     const scope = document.querySelector("main") || document;
-    let assistants = scope.querySelectorAll('[data-message-author-role="assistant"]');
-    let users = scope.querySelectorAll('[data-message-author-role="user"]');
-    // Fallback for UI variants exposing author roles on conversation turns.
-    if (!assistants.length) assistants = scope.querySelectorAll('article[data-turn="assistant"],[data-testid^="conversation-turn-"][data-turn="assistant"]');
-    if (!users.length) users = scope.querySelectorAll('article[data-turn="user"],[data-testid^="conversation-turn-"][data-turn="user"]');
-    const assistant = assistants[assistants.length - 1] || null;
-    const user = users[users.length - 1] || null;
-    const turn = assistant?.closest('article,[data-testid^="conversation-turn-"]') || assistant;
+    const assistant = latestMessage(scope, "assistant");
+    const user = latestMessage(scope, "user");
+    const turn = assistant?.closest(TURN_SELECTOR) || assistant;
     const editor = composer();
     // Restrict language fallbacks to the composer area, never arbitrary response prose.
     const editorArea = editor?.closest('form,[data-type="unified-composer"]') || editor?.parentElement?.parentElement;
@@ -70,15 +109,18 @@
     const streaming = Boolean(turn && (turn.matches(STREAM_SELECTOR) || turn.querySelector(STREAM_SELECTOR)))
       || [...scope.querySelectorAll(STREAM_SELECTOR)].some(visible);
     const busy = explicitStop || labelledStop || streaming;
-    // Fingerprint only the latest assistant node, not sidebar titles or tool timers elsewhere.
-    const text = assistant?.textContent || "";
-    const media = assistant ? [...assistant.querySelectorAll("img,video,audio,canvas")]
-      .map(el => `${el.tagName}:${el.getAttribute("src") || ""}:${el.getAttribute("alt") || ""}`).join("|") : "";
+    // Visual results may be siblings of the text node within the same answer.
+    // Never read iframe documents or transmit prose, markup, media URLs or hashes.
+    const text = responseText(assistant);
+    const mediaElements = responseMedia(turn);
+    const media = mediaElements.map(el => `${nodeKey(el)}:${el.outerHTML}`).join("|");
+    const hasTextOutput = Boolean(text.trim());
+    const visualOnly = !hasTextOutput && mediaElements.length > 0;
     const signature = assistant ? `${nodeKey(assistant)}:${hashText(text)}:${hashText(media)}` : "";
     const afterUser = Boolean(assistant && (!user || (user.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING)));
     const finalControls = Boolean(turn && [...turn.querySelectorAll("button")].some(button => visible(button) && (
       button.matches('[data-testid="copy-turn-action-button"],[data-testid="good-response-turn-action-button"],[data-testid="bad-response-turn-action-button"]')
-      || labelled(button, FINAL_LABEL)
+      || labelled(button, visualOnly ? FINAL_VISUAL_LABEL : FINAL_LABEL)
     )));
     const error = Boolean(turn?.querySelector('[data-testid="conversation-turn-error"],[data-testid="regenerate-thread-error-button"],[role="alert"]'));
     const editorReady = Boolean(editor && visible(editor) && !editor.disabled
@@ -86,8 +128,10 @@
     return {
       route: location.pathname,
       userKey: nodeKey(user), assistantKey: nodeKey(assistant), signature,
-      hasOutput: Boolean(text.trim() || media), afterUser, busy,
+      hasOutput: hasTextOutput || mediaElements.length > 0, afterUser, busy,
       composerReady: editorReady && !busy, finalControls, error,
+      hasTextOutput, visualOnly, mediaCount: mediaElements.length,
+      mediaKinds: [...new Set(mediaElements.map(el => el.tagName.toLowerCase()))],
       stopDetected: explicitStop || labelledStop, streamingDetected: streaming,
       assistantFound: Boolean(assistant), composerFound: Boolean(editor)
     };
@@ -109,10 +153,14 @@
   }
   function buildStatus(s) {
     return {
-      version: "1.0.0", phase: detector.phase, enabled: prefs.enabled,
+      version: "1.0.1", phase: detector.phase, enabled: prefs.enabled,
       stopDetected: s.stopDetected, streamingDetected: s.streamingDetected,
       assistantFound: s.assistantFound, hasOutput: s.hasOutput,
       finalControls: s.finalControls, composerFound: s.composerFound,
+      hasTextOutput: s.hasTextOutput, visualOnly: s.visualOnly,
+      mediaCount: s.mediaCount, mediaKinds: s.mediaKinds,
+      afterUser: s.afterUser, composerReady: s.composerReady,
+      sawBusy: detector.status().sawBusy,
       busy: s.busy, active: Boolean(detector.run), lastEvent,
       sampledAt: Date.now()
     };
@@ -218,7 +266,7 @@
     detector.configure(prefs, Date.now());
     observer.observe(document.documentElement, {
       childList: true, subtree: true, characterData: true, attributes: true,
-      attributeFilter: ["class", "hidden", "aria-label", "aria-busy", "aria-hidden", "data-testid", "data-is-streaming", "data-is-generating", "disabled", "src"]
+      attributeFilter: ["class", "style", "hidden", "aria-label", "aria-busy", "aria-hidden", "data-testid", "data-message-author-role", "data-turn", "data-is-streaming", "data-is-generating", "disabled", "src", "srcdoc", "width", "height", "d", "points", "viewBox", "transform"]
     });
     scan();
     // Backup scan for missed attribute changes and SPA URLs. Background tabs can

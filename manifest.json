@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT 完了通知（ローカル）",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ChatGPTの回答終了を画面から検知し、デスクトップ通知と任意のチャイムでお知らせします。非公式・外部送信なし。",
   "minimum_chrome_version": "116",
   "permissions": ["notifications", "storage", "offscreen"],
