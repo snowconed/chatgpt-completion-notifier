@@ -40,6 +40,8 @@
         id: ++this.sequence, source, startedAt: now,
         baselineSignature: base.signature,
         baselineAssistantKey: base.assistantKey,
+        baselineUserKey: base.userKey,
+        targetUserKey: snapshot.allowUserFallback === false && adopted ? snapshot.userKey : null,
         lastSignature: snapshot.signature,
         outputChangedAt: now, quietSince: snapshot.busy ? null : now, readySince: null,
         sawBusy: Boolean(snapshot.busy),
@@ -95,12 +97,27 @@
       if (now < this.ignoreUntil) return this.drain();
       if (!this.run) {
         if (s.busy) this._start(previous, s, now, "busy", true);
-        else if (s.userKey && previous.userKey && s.userKey !== previous.userKey) {
+        else if (s.allowUserFallback !== false && s.userKey && previous.userKey && s.userKey !== previous.userKey) {
           this._start(previous, s, now, "user-message");
         }
       }
       const run = this.run;
       if (!run) return this.drain();
+      if (s.allowUserFallback === false) {
+        if (!run.targetUserKey && s.userKey && (s.userKey !== run.baselineUserKey
+            || (s.afterUser && s.hasOutput && (s.signature !== run.baselineSignature
+              || s.assistantKey !== run.baselineAssistantKey)))) {
+          run.targetUserKey = s.userKey;
+        }
+        // A virtual transcript may unmount the pending answer and show an old
+        // completed turn. Once the sent turn is identified, keep that target.
+        if (run.targetUserKey && s.userKey !== run.targetUserKey) {
+          run.quietSince = null;
+          run.readySince = null;
+          this._phase(s.busy ? "generating" : "waiting", now);
+          return this.drain();
+        }
+      }
       if (s.signature !== run.lastSignature) {
         run.lastSignature = s.signature;
         run.outputChangedAt = now;
@@ -142,8 +159,12 @@
         this.run = null;
         this._phase("complete", now);
         this.events.push({ type: "complete", id: run.id, source: run.source, at: now });
-      } else if (!run.sawBusy && now - run.startedAt > 120000) {
+      } else if (!run.sawBusy && now - run.startedAt > 120000
+          && !(s.completionRequired && (run.sawOutput || (s.afterUser && s.assistantKey
+            && s.assistantKey !== run.baselineAssistantKey)))) {
         // Failed submit / no output. Never emit a completion merely on timeout.
+        // A new marked-UI answer can be pending for minutes without exposing a
+        // recognized Stop button. Once it exists, keep waiting for its marker.
         this.run = null;
         this._phase("no-signal", now);
       }

@@ -14,7 +14,7 @@ MOCK=r'''() => {
  window.testMessages=[];window.testListeners=[];window.testStorageListeners=[];
  if (!crypto.randomUUID) crypto.randomUUID = () => '00000000-0000-4000-8000-'+String(Math.random()).slice(2,14);
  const cfg={enabled:true,notifyWhenFocused:true,sound:true,volume:0.5,settleMs:5000,keepVisible:false};
- window.chrome={runtime:{id:'test',getURL:p=>'chrome-extension://test/'+p,getManifest:()=>({version:'1.0.2'}),
+ window.chrome={runtime:{id:'test',getURL:p=>'chrome-extension://test/'+p,getManifest:()=>({version:'1.0.3'}),
  onMessage:{addListener:f=>window.testListeners.push(f)},
  sendMessage:async m=>{window.testMessages.push(m);if(m.type==='diagnostics')return {ok:true,permission:'granted',recent:[]};return {ok:true,result:'sent'};}},
  storage:{local:{get:async()=>({settings:cfg}),set:async v=>Object.assign(cfg,v.settings)},onChanged:{addListener:f=>window.testStorageListeners.push(f)}},
@@ -35,6 +35,7 @@ with sync_playwright() as pw:
   page.clock.run_for(2200)
   return page
  def current_page(mode='stream',setup=None):return page_new(mode,'tests/current-ui-fixture.html',setup)
+ def logged_page(mode='stream',setup=None):return page_new(mode,'tests/logged-in-ui-fixture.html',setup)
  def completions(page):return page.evaluate("testMessages.filter(m=>m.type==='complete').length")
  def status(page):
   return page.evaluate("""() => {
@@ -347,7 +348,7 @@ with sync_playwright() as pw:
   p.evaluate("""() => {
    window.originalQuerySelector=document.querySelector;
    document.querySelector=function(selector) {
-    if (selector==='[data-conversation-transcript]') throw new Error('Synthetic transient DOM failure');
+    if (selector==='[data-rail-chat-transcript],[data-conversation-transcript]') throw new Error('Synthetic transient DOM failure');
     return window.originalQuerySelector.call(this,selector);
    };
   }""")
@@ -360,6 +361,179 @@ with sync_playwright() as pw:
   assert recovered['scanError'] is False and recovered['composerFound'] is True,recovered
   assert recovered['sampledAt']>failed['sampledAt'];assert completions(p)==0;p.close()
  check('Current UI reports a transient scan error and recovers on the next scan',current_scan_retry)
+ def logged_discovery():
+  p=logged_page();s=status(p)
+  assert s['composerFound'] is True and s['assistantFound'] is True and s['userFound'] is True,s
+  assert s['hasOutput'] is True and s['finalControls'] is True and s['afterUser'] is True,s
+  assert s['completionRequired'] is True and s['completionMarked'] is True,s
+  assert s['uiVariant']=='thread' and s['busy'] is False,s;p.close()
+ check('Logged-in thread UI discovers nested response bodies, roles and composer',logged_discovery)
+ def logged_old():
+  p=logged_page();p.clock.run_for(20000);s=status(p)
+  assert s['active'] is False and s['busy'] is False,s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI does not notify for an old completed answer',logged_old)
+ def logged_empty():
+  p=logged_page(setup="""() => {
+   loggedFixture.activeRoot.querySelector('[data-dil-response]').textContent='';
+  }""");p.clock.run_for(10000);s=status(p)
+  assert s['assistantFound'] is True and s['finalControls'] is True,s
+  assert s['hasOutput'] is False and s['active'] is False,s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI role headings and action labels are not answer output',logged_empty)
+ def logged_inactive_scope():
+  p=logged_page(setup="""() => {
+   const {activeRoot,inactiveRoot}=loggedFixture;
+   activeRoot.querySelector('[data-dil-response]').textContent='';
+   inactiveRoot.style.display='block';document.body.prepend(inactiveRoot);
+   inactiveRoot.querySelector('[data-dil-response]').className='result-streaming';
+  }""");p.clock.run_for(10000);s=status(p)
+  assert s['uiVariant']=='thread' and s['composerFound'] is True,s
+  assert s['hasOutput'] is False and s['busy'] is False and s['active'] is False,s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI ignores an inactive page even when it is first and visible',logged_inactive_scope)
+ def logged_virtualized_turn():
+  p=logged_page()
+  p.evaluate("""() => {
+   const turn=loggedFixture.createTurn(loggedFixture.transcript,{
+    userText:'Another historical fixture prompt',answerText:'Another historical fixture answer',complete:true
+   });
+   loggedFixture.transcript.replaceChildren(turn);
+  }""");p.clock.run_for(15000);s=status(p)
+  assert s['userFound'] is True and s['assistantFound'] is True and s['hasOutput'] is True,s
+  assert s['active'] is False and s['busy'] is False,s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI historical turn replacement does not arm generation',logged_virtualized_turn)
+ def logged_cloned_turn():
+  p=logged_page()
+  p.evaluate("""() => {
+   const clone=loggedFixture.latestTurn().cloneNode(true);
+   loggedFixture.transcript.replaceChildren(clone);
+  }""");p.clock.run_for(15000);s=status(p)
+  assert s['assistantFound'] is True and s['completionMarked'] is True,s
+  assert s['active'] is False and s['busy'] is False,s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI cloned nodes with unchanged keys do not arm generation',logged_cloned_turn)
+ def logged_no_active_page():
+  p=logged_page(setup="""() => {
+   loggedFixture.activeRoot.setAttribute('data-app-shell-active-page','false');
+   loggedFixture.inactiveRoot.style.display='block';
+  }""");p.clock.run_for(15000);s=status(p)
+  assert s['composerFound'] is False and s['assistantFound'] is False and s['userFound'] is False,s
+  assert s['hasOutput'] is False and s['busy'] is False and s['active'] is False,s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI finds no conversation when all app pages are inactive',logged_no_active_page)
+ def logged_user_media():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate("""() => {
+   const turn=loggedFixture.latestTurn();
+   const bubble=turn.querySelector('[data-user-message-bubble]');
+   bubble.insertAdjacentHTML('beforeend','<svg width="280" height="160"><circle cx="100" cy="70" r="50" fill="teal"/></svg>');
+   loggedFinish({preserve:true});
+  }""");p.clock.run_for(15000);s=status(p)
+  assert s['assistantFound'] is True and s['finalControls'] is True,s
+  assert s['hasOutput'] is False and s['phase']=='waiting',s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI excludes user media from an empty assistant answer in the same turn',logged_user_media)
+ def logged_normal():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500);s=status(p)
+  assert s['busy'] is True and s['completionMarked'] is False,s
+  p.evaluate("loggedToken('Streaming logged-in fixture answer')");p.clock.run_for(10000)
+  assert completions(p)==0
+  p.evaluate('loggedFinish()');p.clock.run_for(4000);assert completions(p)==0
+  p.clock.run_for(3500);assert completions(p)==1
+  p.clock.run_for(10000);assert completions(p)==1;p.close()
+ check('Logged-in thread UI waits for completion and notifies once',logged_normal)
+ def logged_fast():
+  p=logged_page('fast');p.click('#logged-submit');p.clock.run_for(8000)
+  assert completions(p)==1
+  p.clock.run_for(10000);assert completions(p)==1;p.close()
+ check('Logged-in thread UI handles a reply completed within the submit event',logged_fast)
+ def logged_enter():
+  p=logged_page('fast');p.locator('[data-app-shell-active-page="true"] [data-composer-markdown]').press('Enter')
+  p.clock.run_for(8000);assert completions(p)==1;p.close()
+ check('Logged-in thread UI supports Enter in the contenteditable composer',logged_enter)
+ def logged_svg():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate("""() => {
+   loggedFixture.bodyOf(loggedFixture.latestTurn()).innerHTML='<svg width="280" height="160"><path d="M 20 120 L 140 20 L 260 120 Z" fill="teal"/></svg>';
+  }""");p.clock.run_for(8000);assert completions(p)==0
+  p.evaluate('loggedFinish({preserve:true})');p.clock.run_for(7500);s=status(p)
+  assert s['visualOnly'] is True and s['finalControls'] is True,s
+  assert completions(p)==1;p.close()
+ check('Logged-in thread UI SVG-only reply uses its completed turn and action controls',logged_svg)
+ def logged_iframe():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate("""() => {
+   const response=loggedFixture.latestTurn().querySelector('[data-response-body]');
+   const frame=document.createElement('iframe');frame.width='280';frame.height='160';
+   frame.srcdoc='<html><body><svg width="250" height="130"><circle cx="100" cy="60" r="40" fill="teal"/></svg></body></html>';
+   response.after(frame);loggedFinish({preserve:true});
+  }""");p.clock.run_for(7500);s=status(p)
+  assert s['visualOnly'] is True and s['hasOutput'] is True,s
+  assert completions(p)==1;p.close()
+ check('Logged-in thread UI recognizes an iframe beside the response body',logged_iframe)
+ def logged_late_completion():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate('loggedFinish({mark:false})');p.clock.run_for(12000);s=status(p)
+  assert s['busy'] is False and s['finalControls'] is True and s['hasOutput'] is True,s
+  assert s['completionRequired'] is True and s['completionMarked'] is False,s
+  assert s['phase']=='waiting' and completions(p)==0,s
+  p.evaluate("loggedFixture.stateOf(loggedFixture.latestTurn()).setAttribute('data-talvt-turn-state','complete')")
+  p.clock.run_for(4000);assert completions(p)==0
+  p.clock.run_for(3500);assert completions(p)==1;p.close()
+ check('Logged-in thread UI waits for a late explicit complete state',logged_late_completion)
+ def logged_long_pending_without_stop():
+  p=logged_page('no-stop');p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate("loggedToken('Long pending fixture response without a visible Stop control')")
+  p.clock.run_for(130000);s=status(p)
+  assert s['busy'] is False and s['sawBusy'] is False,s
+  assert s['active'] is True and s['phase']=='waiting' and s['completionMarked'] is False,s
+  assert completions(p)==0
+  p.evaluate('loggedFinish()');p.clock.run_for(7500);assert completions(p)==1;p.close()
+ check('Logged-in thread UI keeps a reply pending beyond two minutes without a Stop control',logged_long_pending_without_stop)
+ def logged_pending_turn_virtualization():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate("loggedToken('Pending answer before virtual scrolling')");p.clock.run_for(500)
+  assert status(p)['active'] is True
+  p.evaluate("""() => {
+   window.loggedPendingTurn=loggedFixture.latestTurn();
+   const historical=loggedFixture.transcript.firstElementChild.cloneNode(true);
+   document.getElementById('logged-stop').remove();
+   document.getElementById('logged-submit').hidden=false;
+   loggedFixture.transcript.replaceChildren(historical);
+  }""");p.clock.run_for(10000);s=status(p)
+  assert s['busy'] is False and s['completionMarked'] is True,s
+  assert s['active'] is True and completions(p)==0,s
+  p.evaluate("""() => {
+   loggedFixture.transcript.append(window.loggedPendingTurn);
+   delete window.loggedPendingTurn;loggedFinish();
+  }""");p.clock.run_for(7500);assert completions(p)==1
+  p.clock.run_for(10000);assert completions(p)==1;p.close()
+ check('Logged-in thread UI pins a pending answer while historical turns replace the visible DOM',logged_pending_turn_virtualization)
+ def logged_lost_completion():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500);p.evaluate('loggedFinish()')
+  p.clock.run_for(4000);assert completions(p)==0
+  p.evaluate("loggedFixture.stateOf(loggedFixture.latestTurn()).removeAttribute('data-talvt-turn-state')")
+  p.clock.run_for(4000);assert completions(p)==0;assert status(p)['phase']=='waiting'
+  p.evaluate("loggedFixture.stateOf(loggedFixture.latestTurn()).setAttribute('data-talvt-turn-state','complete')")
+  p.clock.run_for(4000);assert completions(p)==0
+  p.clock.run_for(3500);assert completions(p)==1;p.close()
+ check('Logged-in thread UI restarts settling when the complete state disappears',logged_lost_completion)
+ def logged_actions_only():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate('loggedFinish({preserve:true})');p.clock.run_for(15000);s=status(p)
+  assert s['finalControls'] is True and s['completionMarked'] is True,s
+  assert s['hasOutput'] is False and s['phase']=='waiting',s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI does not notify for only headings and action buttons',logged_actions_only)
+ def logged_stopped():
+  p=logged_page();p.click('#logged-submit');p.clock.run_for(500)
+  p.evaluate("loggedToken('Partial logged-in fixture answer')");p.click('#logged-stop')
+  p.clock.run_for(15000);s=status(p)
+  assert s['lastEvent']=='manual-stop' and s['completionMarked'] is True,s
+  assert completions(p)==0;p.close()
+ check('Logged-in thread UI preserves manual-stop suppression through the known label fallback',logged_stopped)
  def popup_page(content_status=None):
   p=context.new_page();errors=[];p.on('pageerror',lambda e:errors.append(str(e)))
   html=(ROOT/'popup.html').read_text(encoding='utf-8')
@@ -399,8 +573,8 @@ with sync_playwright() as pw:
   check(name,lambda content_status=content_status,expected=expected:popup_status(content_status,expected))
  def popup_version():
   p,errors=popup_page();diagnostic=json.loads(p.locator('#diagnostics').text_content())
-  assert diagnostic['extension']=='1.0.2';assert not errors,errors;p.close()
- check('Popup diagnostics reports the manifest version 1.0.2',popup_version)
+  assert diagnostic['extension']=='1.0.3';assert not errors,errors;p.close()
+ check('Popup diagnostics reports the manifest version 1.0.3',popup_version)
  report={'browser':browser.version,'test_type':'Offline fixture with mock Chrome APIs; NO native extension installation, Windows banner, or logged-in ChatGPT verification','results':results}
  if args.report:Path(args.report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
  browser.close()

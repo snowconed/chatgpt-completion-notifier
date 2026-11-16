@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>Synthetic logged-in ChatGPT UI fixture</title></head>
+<body>
+<div data-app-shell-active-page="true">
+  <main>
+    <div data-thread-frame-scrollbar="true" role="region">
+      <div data-rail-chat-transcript="true"></div>
+    </div>
+    <form data-chatgpt-composer data-composer-placement="thread">
+      <div data-composer-markdown contenteditable="true" role="textbox" aria-label="ChatGPT に聞く">Fixture prompt</div>
+      <button id="logged-submit" type="submit" aria-label="送信">Send</button>
+    </form>
+  </main>
+</div>
+<div data-app-shell-active-page="false" style="display:none">
+  <main>
+    <div data-thread-frame-scrollbar="true" role="region">
+      <div data-rail-chat-transcript="true"></div>
+    </div>
+    <form data-chatgpt-composer data-composer-placement="thread">
+      <div data-composer-markdown contenteditable="true" role="textbox" aria-label="ChatGPT に聞く">Inactive fixture prompt</div>
+    </form>
+  </main>
+</div>
+<script>
+// Only synthetic IDs and text are used. The nesting and completed-state
+// attributes mirror the observed logged-in UI, including the cached page.
+window.fixtureMode = 'stream';
+let fixtureSequence = 0;
+const fixtureUuid = () => '60000000-0000-4000-8000-' + String(++fixtureSequence).padStart(12, '0');
+const activeRoot = document.querySelector('[data-app-shell-active-page="true"]');
+const inactiveRoot = document.querySelector('[data-app-shell-active-page="false"]');
+const transcript = activeRoot.querySelector('[data-rail-chat-transcript]');
+const form = activeRoot.querySelector('[data-chatgpt-composer]');
+const editor = form.querySelector('[data-composer-markdown]');
+const submit = document.getElementById('logged-submit');
+
+function addActions(state) {
+  const actions = document.createElement('div');
+  actions.setAttribute('data-fixture-actions', '');
+  actions.innerHTML = '<button type="button" aria-label="コピーする">Copy</button><button type="button" aria-label="読み上げ">Read aloud</button>';
+  state.append(actions);
+  return actions;
+}
+
+function createTurn(target, { userText = 'Fixture prompt', answerText = '', complete = false } = {}) {
+  const turn = document.createElement('div');
+  turn.setAttribute('data-turn-key', fixtureUuid());
+  const index = fixtureSequence;
+  const state = document.createElement('div');
+  state.setAttribute('data-talvt-turn-state', complete ? 'complete' : '');
+  const activity = document.createElement('div');
+  activity.setAttribute('data-spacing', 'activity');
+
+  const userWrapper = document.createElement('div');
+  const userHeading = document.createElement('h4');
+  userHeading.setAttribute('data-conversation-role', 'user');
+  userHeading.textContent = 'User';
+  const userUnit = document.createElement('div');
+  userUnit.setAttribute('data-chatgpt-search-unit-key', `fallback-turn-${index}:0:user`);
+  const bubble = document.createElement('div');
+  bubble.setAttribute('data-user-message-bubble', 'true');
+  bubble.textContent = userText;
+  userUnit.append(bubble);userWrapper.append(userHeading, userUnit);
+
+  const assistantWrapper = document.createElement('div');
+  const start = document.createElement('span');
+  start.hidden = true;start.setAttribute('data-chatgpt-agent-turn-start', '');
+  const assistantUnit = document.createElement('div');
+  assistantUnit.setAttribute('data-chatgpt-search-unit-key', `fallback-turn-${index}:2:assistant`);
+  const assistantHeading = document.createElement('h4');
+  assistantHeading.setAttribute('data-conversation-role', 'assistant');
+  assistantHeading.textContent = 'Assistant';
+  const response = document.createElement('div');
+  response.setAttribute('data-response-body', fixtureUuid());
+  response.innerHTML = '<div data-markdown-text-style="assistant-message"><div data-markdown-copy="contents"><div data-dil-response></div></div></div>';
+  response.querySelector('[data-dil-response]').textContent = answerText;
+  assistantUnit.append(assistantHeading, response);assistantWrapper.append(start, assistantUnit);
+  activity.append(userWrapper, assistantWrapper);state.append(activity);turn.append(state);target.append(turn);
+  if (complete) addActions(state);
+  return turn;
+}
+
+createTurn(transcript, { userText: 'Previous active fixture prompt', answerText: 'Previous active fixture answer', complete: true });
+createTurn(inactiveRoot.querySelector('[data-rail-chat-transcript]'), {
+  userText: 'Previous inactive fixture prompt', answerText: 'Previous inactive fixture answer', complete: true
+});
+const latestTurn = () => transcript.lastElementChild;
+const stateOf = turn => turn.firstElementChild;
+const bodyOf = turn => turn.querySelector('[data-dil-response]');
+
+function finish({ mark = true, preserve = false, actions = true } = {}) {
+  const turn = latestTurn();
+  const state = stateOf(turn);
+  if (mark) state.setAttribute('data-talvt-turn-state', 'complete');
+  else state.setAttribute('data-talvt-turn-state', '');
+  if (!preserve) bodyOf(turn).textContent = 'Completed logged-in fixture answer';
+  state.querySelector('[data-fixture-actions]')?.remove();
+  if (actions) addActions(state);
+  document.getElementById('logged-stop')?.remove();
+  submit.hidden = false;
+  editor.textContent = '';
+}
+
+function begin() {
+  createTurn(transcript, { userText: 'New logged-in fixture prompt' });
+  // No production in-progress state value has been observed. Pending turns
+  // use an empty completion attribute; this synthetic Stop label tests the
+  // existing label fallback rather than inventing a new UI selector/state.
+  submit.hidden = true;
+  const stop = document.createElement('button');
+  stop.id = 'logged-stop';stop.type = 'button';
+  stop.setAttribute('aria-label', '停止');stop.textContent = 'Stop';
+  stop.addEventListener('click', () => finish({ preserve: true }));
+  if (window.fixtureMode !== 'no-stop') form.append(stop);
+  if (window.fixtureMode === 'fast') finish();
+}
+
+form.addEventListener('submit', event => { event.preventDefault();begin(); });
+editor.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    event.preventDefault();begin();
+  }
+});
+window.loggedFinish = finish;
+window.loggedToken = text => { bodyOf(latestTurn()).textContent = text; };
+window.loggedFixture = { activeRoot, inactiveRoot, transcript, form, editor, createTurn, addActions, latestTurn, stateOf, bodyOf };
+</script>
+</body>
+</html>

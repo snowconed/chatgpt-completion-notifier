@@ -5,7 +5,7 @@
   globalThis.__cgnLoaded = true;
   const { settings: sanitizeSettings } = CGN;
   const VERSION = chrome.runtime.getManifest().version;
-  const COMPOSER_SELECTOR = '#prompt-textarea,[data-testid="prompt-textarea"],textarea[name="prompt-textarea"],#mobile-composer-prompt,textarea[data-mobile-composer-prompt]';
+  const COMPOSER_SELECTOR = '#prompt-textarea,[data-testid="prompt-textarea"],textarea[name="prompt-textarea"],#mobile-composer-prompt,textarea[data-mobile-composer-prompt],form[data-chatgpt-composer] [data-composer-markdown][contenteditable]';
   const STOP_SELECTOR = 'button[data-testid="stop-button"],button[data-testid="stop-generation-button"],button[data-testid="stop-response-button"],button[data-stop-generating]';
   const SEND_SELECTOR = 'button[data-testid="send-button"],button[data-testid="composer-send-button"],button[data-composer-submit]:not([data-stop-generating])';
   const STREAM_SELECTOR = '.result-streaming,[data-is-streaming="true"],[data-is-generating="true"]';
@@ -14,9 +14,11 @@
   const SEND_LABEL = /^(?:send(?: prompt| message)?|送信|メッセージを送信(?:します)?|プロンプトを送信)$/i;
   const FINAL_LABEL = /^(?:copy(?: response| message)?|good response|bad response|read aloud|コピー|回答をコピー(?:する)?|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
   const FINAL_VISUAL_LABEL = /^(?:copy (?:response|message)|good response|bad response|read aloud|回答をコピー(?:する)?|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
+  const THREAD_FINAL_LABEL = /^(?:copy(?: response| message)?|read aloud|コピーする|読み上げ)$/i;
   const REGEN_LABEL = /^(?:regenerate(?: response)?|try again|再生成|回答を再生成|もう一度試す)$/i;
-  const TURN_SELECTOR = 'article,[data-testid^="conversation-turn-"],[data-message-role]';
-  const NON_OUTPUT_SELECTOR = 'button,[role="button"],script,style,template,[hidden],[aria-hidden="true"],[data-message-attribution],[data-message-actions]';
+  const TURN_SELECTOR = 'article,[data-testid^="conversation-turn-"],[data-message-role],[data-chatgpt-search-unit-key]';
+  const NON_OUTPUT_SELECTOR = 'button,[role="button"],script,style,template,[hidden],[aria-hidden="true"],[data-message-attribution],[data-message-actions],[data-conversation-role],[data-markdown-copy="exclude"]';
+  const emptyScope = document.createDocumentFragment();
   let prefs = sanitizeSettings();
   const detector = new CgnCompletionDetector(prefs);
   const documentId = crypto.randomUUID();
@@ -32,7 +34,7 @@
   const observer = new MutationObserver(() => schedule(250));
 
   function visible(el) {
-    if (!el || el.closest('[hidden],[aria-hidden="true"]')) return false;
+    if (!el || el.closest('[hidden],[aria-hidden="true"],[data-app-shell-active-page="false"]')) return false;
     if (!el.getClientRects().length) return false;
     const style = getComputedStyle(el);
     return style.display !== "none" && style.visibility !== "hidden";
@@ -43,6 +45,8 @@
   }
   function nodeKey(el) {
     if (!el) return "";
+    const unit = el.getAttribute("data-chatgpt-search-unit-key");
+    if (unit) return `${el.closest('[data-turn-key]')?.getAttribute('data-turn-key') || ""}:${unit}`;
     const stable = el.getAttribute("data-message-id") || el.id;
     if (stable) return stable;
     if (!nodeIds.has(el)) nodeIds.set(el, `node-${++nodeSequence}`);
@@ -54,18 +58,28 @@
     for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
     return `${text.length}:${hash >>> 0}`;
   }
-  function composer() {
-    return [...document.querySelectorAll(COMPOSER_SELECTOR)].find(visible) || null;
+  function pageScope() {
+    // Cached pages remain in the document, sometimes with visible geometry.
+    // During a page switch, wait instead of falling back to an inactive chat.
+    return document.querySelector('[data-app-shell-active-page="true"]')
+      || (document.querySelector('[data-app-shell-active-page]') ? emptyScope : document);
+  }
+  function composer(page = pageScope()) {
+    return [...page.querySelectorAll(COMPOSER_SELECTOR)].find(visible) || null;
   }
   function latestMessage(scope, role) {
     // Mix both formats in document order: older text replies must not hide a
     // newer tool/visual turn which only exposes data-turn.
-    const matches = scope.querySelectorAll(`[data-message-author-role="${role}"],[data-message-role="${role}"],article[data-turn="${role}"],[data-testid^="conversation-turn-"][data-turn="${role}"]`);
+    const matches = scope.querySelectorAll(`[data-message-author-role="${role}"],[data-message-role="${role}"],article[data-turn="${role}"],[data-testid^="conversation-turn-"][data-turn="${role}"],[data-chatgpt-search-unit-key$=":${role}"]`);
     return matches[matches.length - 1] || null;
   }
   function responseText(assistant) {
     if (!assistant) return "";
-    const copy = (assistant.querySelector('[data-assistant-markdown]') || assistant).cloneNode(true);
+    const source = assistant.matches('[data-chatgpt-search-unit-key]')
+      ? assistant.querySelector('[data-response-body]')
+      : assistant.querySelector('[data-assistant-markdown]') || assistant;
+    if (!source) return "";
+    const copy = source.cloneNode(true);
     // A fallback assistant can itself be the article. Its action labels and
     // SVG labels are not prose and must not turn an empty reply into output.
     copy.querySelectorAll(`${NON_OUTPUT_SELECTOR},svg,iframe,canvas,video,audio`).forEach(el => el.remove());
@@ -75,7 +89,7 @@
     if (!turn) return [];
     return [...turn.querySelectorAll("img,video,audio,canvas,svg,iframe")].filter(el => {
       if (!visible(el) || el.closest('script,style,template,[hidden],[aria-hidden="true"]')
-          || el.closest('[data-message-author-role="user"],[data-message-role="user"],[data-turn="user"]')) return false;
+          || el.closest('[data-message-author-role="user"],[data-message-role="user"],[data-turn="user"],[data-chatgpt-search-unit-key$=":user"]')) return false;
       const owner = el.closest(TURN_SELECTOR);
       if (owner && owner !== turn) return false;
       const tag = el.tagName.toLowerCase();
@@ -99,25 +113,29 @@
     });
   }
   function snapshot() {
-    const transcript = document.querySelector('[data-conversation-transcript]');
-    const scope = transcript || document.querySelector('main[data-slot="conversation"]') || document.querySelector("main") || document;
+    const page = pageScope();
+    const transcript = page.querySelector('[data-rail-chat-transcript],[data-conversation-transcript]');
+    const scope = transcript || page.querySelector('main[data-slot="conversation"]') || page.querySelector("main") || page;
     const assistant = latestMessage(scope, "assistant");
     const user = latestMessage(scope, "user");
     const turn = assistant?.closest(TURN_SELECTOR) || assistant;
+    const threadUI = Boolean(transcript?.matches('[data-rail-chat-transcript]') || page.querySelector('form[data-chatgpt-composer]'));
+    const threadState = threadUI ? assistant?.closest('[data-talvt-turn-state]') : null;
     // Current transcript turns expose an explicit completion attribute. An
     // enabled composer or temporarily missing Stop button is not enough there.
-    const completionRequired = Boolean(turn?.matches('[data-message-role="assistant"]'));
-    const completionMarked = completionRequired && turn.hasAttribute('data-message-complete');
-    const editor = composer();
+    const completionRequired = threadUI || Boolean(turn?.matches('[data-message-role="assistant"]'));
+    const completionMarked = threadUI ? threadState?.getAttribute('data-talvt-turn-state') === 'complete'
+      : completionRequired && turn.hasAttribute('data-message-complete');
+    const editor = composer(page);
     // Restrict language fallbacks to the composer area, never arbitrary response prose.
     const editorArea = editor?.closest('form,[data-type="unified-composer"]') || editor?.parentElement?.parentElement;
-    const explicitStop = [...document.querySelectorAll(STOP_SELECTOR)].some(visible);
+    const explicitStop = [...page.querySelectorAll(STOP_SELECTOR)].some(visible);
     const labelledStop = editorArea ? [...editorArea.querySelectorAll('button[aria-label],button[title]')]
       .some(button => visible(button) && labelled(button, STOP_LABEL)) : false;
     // Loading widgets inside an old completed answer do not start a new run.
     // The current UI's generic aria-busy signal belongs only to the latest,
     // unfinished assistant turn; Stop and form-submission signals stay global.
-    const currentStreaming = completionRequired && !completionMarked
+    const currentStreaming = !threadUI && completionRequired && !completionMarked
       && [...turn.querySelectorAll(CURRENT_STREAM_SELECTOR)].some(visible);
     const streaming = currentStreaming
       || Boolean(turn && (turn.matches(STREAM_SELECTOR) || turn.querySelector(STREAM_SELECTOR)))
@@ -133,7 +151,11 @@
     const visualOnly = !hasTextOutput && mediaElements.length > 0;
     const signature = assistant ? `${nodeKey(assistant)}:${hashText(text)}:${hashText(media)}` : "";
     const afterUser = Boolean(assistant && (!user || (user.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING)));
-    const finalControls = Boolean(turn && [...turn.querySelectorAll("button")].some(button => visible(button) && (
+    const finalControls = threadUI ? Boolean(threadState && [...threadState.querySelectorAll('button')].some(button =>
+      visible(button) && button.closest('[data-talvt-turn-state]') === threadState
+      && !button.closest('[data-spacing="activity"],[data-chatgpt-search-unit-key],[data-response-body]')
+      && labelled(button, THREAD_FINAL_LABEL)))
+      : Boolean(turn && [...turn.querySelectorAll("button")].some(button => visible(button) && (
       button.matches('[data-testid="copy-turn-action-button"],[data-testid="good-response-turn-action-button"],[data-testid="bad-response-turn-action-button"]')
       || (button.matches('[data-copy-message]') && button.closest('[data-assistant-message-actions]'))
       || labelled(button, visualOnly ? FINAL_VISUAL_LABEL : FINAL_LABEL)
@@ -145,6 +167,8 @@
       route: location.pathname,
       userKey: nodeKey(user), assistantKey: nodeKey(assistant), signature,
       hasOutput: hasTextOutput || mediaElements.length > 0, afterUser, busy,
+      // Virtual scrolling can mount an older user turn without a new send.
+      allowUserFallback: !threadUI,
       composerReady: editorReady && !busy, finalControls, error,
       completionRequired, completionMarked,
       hasTextOutput, visualOnly, mediaCount: mediaElements.length,
@@ -152,7 +176,7 @@
       stopDetected: explicitStop || labelledStop, streamingDetected: streaming,
       assistantFound: Boolean(assistant), userFound: Boolean(user), composerFound: Boolean(editor),
       uiDetected: Boolean(editor),
-      uiVariant: transcript || editor?.matches('#mobile-composer-prompt,[data-mobile-composer-prompt]') ? "current" : editor ? "legacy" : "unknown"
+      uiVariant: threadUI ? "thread" : transcript || editor?.matches('#mobile-composer-prompt,[data-mobile-composer-prompt]') ? "current" : editor ? "legacy" : "unknown"
     };
   }
   function dispose() {
@@ -245,7 +269,7 @@
       } catch { /* Not a navigable URL. */ }
     }
     const button = el.closest("button");
-    if (!button || button.disabled) return;
+    if (!button || button.disabled || !pageScope().contains(button)) return;
     if (button.matches(STOP_SELECTOR) || labelled(button, STOP_LABEL)) {
       lastEvent = "manual-stop";
       detector.cancel(Date.now());
@@ -290,7 +314,7 @@
     detector.configure(prefs, Date.now());
     observer.observe(document.documentElement, {
       childList: true, subtree: true, characterData: true, attributes: true,
-      attributeFilter: ["class", "style", "hidden", "aria-label", "aria-busy", "aria-hidden", "aria-disabled", "data-testid", "data-message-author-role", "data-message-role", "data-message-complete", "data-stop-generating", "data-octane-followup-submitting", "data-turn", "data-is-streaming", "data-is-generating", "disabled", "src", "srcdoc", "width", "height", "d", "points", "viewBox", "transform"]
+      attributeFilter: ["class", "style", "hidden", "aria-label", "aria-busy", "aria-hidden", "aria-disabled", "data-testid", "data-message-author-role", "data-message-role", "data-message-complete", "data-stop-generating", "data-octane-followup-submitting", "data-app-shell-active-page", "data-talvt-turn-state", "data-chatgpt-search-unit-key", "data-response-body", "data-turn-key", "contenteditable", "data-turn", "data-is-streaming", "data-is-generating", "disabled", "src", "srcdoc", "width", "height", "d", "points", "viewBox", "transform"]
     });
     scan();
     // Backup scan for missed attribute changes and SPA URLs. Background tabs can

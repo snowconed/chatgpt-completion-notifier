@@ -189,6 +189,54 @@ test("newly observed user messages can arm the conservative fallback", () => {
   const d=fresh();const s=base({userKey:"u2",assistantKey:"a2",signature:"new"});d.tick(s,3000);
   assert.equal(completes(d.tick(s,8000)).length,1);
 });
+
+test("virtualized history cannot arm monitoring when user-message fallback is disabled", () => {
+  const d=fresh();
+  const history=base({userKey:"older-user",assistantKey:"older-answer",signature:"historical",allowUserFallback:false});
+  d.tick(history,3000);
+  assert.equal(completes(d.tick(history,10000)).length,0);
+  assert.equal(d.run,null);
+  d.submit(history,11000);
+  const answer={...history,userKey:"new-user",assistantKey:"new-answer",signature:"fresh"};
+  d.tick(answer,12000);
+  assert.equal(completes(d.tick(answer,17000)).length,1);
+});
+
+test("a new answer awaiting an explicit marker survives two minutes without a busy signal", () => {
+  const d=fresh();d.submit(base(),3000);
+  const pending=base({userKey:"u2",assistantKey:"a2",signature:"new-empty",hasOutput:false,
+    allowUserFallback:false,completionRequired:true,completionMarked:false});
+  for (const at of [4000,124000,900000]) {
+    assert.equal(completes(d.tick(pending,at)).length,0);
+    assert.ok(d.run);
+  }
+  const done={...pending,signature:"new-answer",hasOutput:true,completionMarked:true};
+  d.tick(done,901000);
+  assert.equal(completes(d.tick(done,906000)).length,1);
+});
+
+test("an active virtualized answer cannot be completed by a historical turn", () => {
+  const d=fresh();d.submit(base(),3000);
+  const pending=base({userKey:"sent-user",assistantKey:"sent-answer",signature:"pending",allowUserFallback:false,
+    completionRequired:true,completionMarked:false});
+  d.tick(pending,4000);
+  const history={...pending,userKey:"older-user",assistantKey:"older-answer",signature:"historical",completionMarked:true};
+  for(const at of [5000,20000,125000]) assert.equal(completes(d.tick(history,at)).length,0);
+  assert.ok(d.run);
+  const done={...pending,signature:"complete",completionMarked:true};d.tick(done,126000);
+  assert.equal(completes(d.tick(done,130999)).length,0);
+  assert.equal(completes(d.tick(done,131000)).length,1);
+});
+
+test("regeneration pins the unchanged user when the replacement answer is observed", () => {
+  const d=fresh();d.submit(base(),3000);
+  const regenerated=base({signature:"replacement",allowUserFallback:false,completionRequired:true,completionMarked:false});
+  d.tick(regenerated,4000);
+  const history={...regenerated,userKey:"older-user",assistantKey:"older-answer",signature:"historical",completionMarked:true};
+  for(const at of [5000,20000]) assert.equal(completes(d.tick(history,at)).length,0);
+  const done={...regenerated,completionMarked:true};d.tick(done,21000);
+  assert.equal(completes(d.tick(done,26000)).length,1);
+});
 test("settings are bounded and reject non-boolean values", () => {
   assert.deepEqual(settings({volume:12,enabled:"yes",settleMs:1}).volume,1);
   assert.equal(settings({enabled:"false"}).enabled,true);
