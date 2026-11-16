@@ -14,7 +14,7 @@ MOCK=r'''() => {
  window.testMessages=[];window.testListeners=[];window.testStorageListeners=[];
  if (!crypto.randomUUID) crypto.randomUUID = () => '00000000-0000-4000-8000-'+String(Math.random()).slice(2,14);
  const cfg={enabled:true,notifyWhenFocused:true,sound:true,volume:0.5,settleMs:5000,keepVisible:false};
- window.chrome={runtime:{id:'test',getURL:p=>'chrome-extension://test/'+p,getManifest:()=>({version:'1.0.1'}),
+ window.chrome={runtime:{id:'test',getURL:p=>'chrome-extension://test/'+p,getManifest:()=>({version:'1.0.2'}),
  onMessage:{addListener:f=>window.testListeners.push(f)},
  sendMessage:async m=>{window.testMessages.push(m);if(m.type==='diagnostics')return {ok:true,permission:'granted',recent:[]};return {ok:true,result:'sent'};}},
  storage:{local:{get:async()=>({settings:cfg}),set:async v=>Object.assign(cfg,v.settings)},onChanged:{addListener:f=>window.testStorageListeners.push(f)}},
@@ -26,13 +26,15 @@ with sync_playwright() as pw:
  context=browser.new_context(viewport={'width':400,'height':820})
  context.route('**/*',lambda route:route.abort())
  def inject(p,name):p.add_script_tag(content=(ROOT/name).read_text(encoding='utf-8'))
- def page_new(mode='stream'):
-  page=context.new_page();page.set_content((ROOT/'tests/dom-fixture.html').read_text(encoding='utf-8'))
+ def page_new(mode='stream',fixture='tests/dom-fixture.html',setup=None):
+  page=context.new_page();page.set_content((ROOT/fixture).read_text(encoding='utf-8'))
   page.evaluate(MOCK);page.clock.install()
   page.evaluate('(mode)=>window.fixtureMode=mode',mode)
+  if setup is not None:page.evaluate(setup)
   for name in ['shared.js','detector-core.js','content.js']:inject(page,name)
   page.clock.run_for(2200)
   return page
+ def current_page(mode='stream',setup=None):return page_new(mode,'tests/current-ui-fixture.html',setup)
  def completions(page):return page.evaluate("testMessages.filter(m=>m.type==='complete').length")
  def status(page):
   return page.evaluate("""() => {
@@ -226,20 +228,179 @@ with sync_playwright() as pw:
   }""")
   p.clock.run_for(15000);assert status(p)['finalControls'] is False;assert completions(p)==0;p.close()
  check('Generic diagram Copy button is not an answer completion signal',diagram_copy_only)
- def popup():
+ def current_discovery():
+  p=current_page();s=status(p)
+  assert s['composerFound'] is True,s
+  assert s['assistantFound'] is True,s
+  assert s['hasOutput'] is True and s['finalControls'] is True,s
+  assert s['busy'] is False,s;p.close()
+ check('Current UI discovers message-role answers and the footer textarea',current_discovery)
+ def current_old():
+  p=current_page();p.clock.run_for(20000)
+  assert completions(p)==0;assert status(p)['active'] is False;p.close()
+ check('Current UI does not notify for an already completed conversation',current_old)
+ def current_old_loading_widget():
+  p=current_page(setup="""() => {
+   const response=document.querySelector('[data-assistant-markdown-root]');
+   response.insertAdjacentHTML('beforeend','<span data-fixture-loading aria-busy="true">Loading an old attachment</span>');
+  }""")
+  s=status(p)
+  assert s['busy'] is False and s['streamingDetected'] is False,s
+  assert s['active'] is False,s
+  p.clock.run_for(10000);assert completions(p)==0
+  p.evaluate("document.querySelector('[data-fixture-loading]').setAttribute('aria-busy','false')")
+  p.clock.run_for(10000);s=status(p)
+  assert s['busy'] is False and s['active'] is False,s
+  assert completions(p)==0
+  assert p.evaluate("testMessages.filter(m=>m.type==='status' && m.status.phase==='generating').length")==0
+  p.close()
+ check('Current UI loading widget in a completed answer never starts monitoring',current_old_loading_widget)
+ def current_previous_loading_widget():
+  p=current_page();p.click('#current-submit');p.clock.run_for(500)
+  assert status(p)['busy'] is True
+  p.evaluate("""() => {
+   const oldResponse=document.querySelector('[data-assistant-markdown-root]');
+   oldResponse.insertAdjacentHTML('beforeend','<span data-fixture-loading aria-busy="true">Loading an old attachment</span>');
+   currentFinish();
+  }""")
+  p.clock.run_for(7500);s=status(p)
+  assert p.locator('[data-fixture-loading]').get_attribute('aria-busy')=='true'
+  assert s['busy'] is False and s['streamingDetected'] is False,s
+  assert completions(p)==1
+  p.clock.run_for(10000);assert completions(p)==1;p.close()
+ check('Current UI loading widget in an older turn cannot block a new completion',current_previous_loading_widget)
+ def current_idle_submit():
+  p=current_page();p.clock.run_for(15000);s=status(p)
+  assert p.locator('[data-composer-submit]').get_attribute('type')=='submit'
+  assert s['busy'] is False and s['stopDetected'] is False,s
+  assert completions(p)==0;p.close()
+ check('Current UI ordinary submit button does not imply generation',current_idle_submit)
+ def current_normal():
+  p=current_page();p.click('#current-submit');p.clock.run_for(500);s=status(p)
+  assert s['composerFound'] is True and s['assistantFound'] is True,s
+  assert s['busy'] is True and s['stopDetected'] is True,s
+  p.evaluate("currentToken('Current UI streaming answer')");p.clock.run_for(10000)
+  assert completions(p)==0
+  p.evaluate('currentFinish()')
+  assert p.locator('[data-composer-submit]').get_attribute('aria-disabled')=='true'
+  assert p.locator('[data-mobile-composer-prompt]').is_enabled()
+  p.clock.run_for(4000);assert completions(p)==0
+  p.clock.run_for(3500);assert completions(p)==1
+  p.clock.run_for(10000);assert completions(p)==1;p.close()
+ check('Current UI streams then notifies once with an empty-input disabled send button',current_normal)
+ def current_fast():
+  p=current_page('fast');p.click('#current-submit');p.clock.run_for(8000)
+  assert completions(p)==1
+  p.clock.run_for(10000);assert completions(p)==1;p.close()
+ check('Current UI fast answer with stop markers added and removed synchronously',current_fast)
+ def current_stopped():
+  p=current_page();p.click('#current-submit');p.clock.run_for(500)
+  p.evaluate("currentToken('Partial current UI answer')");p.click('#current-submit')
+  p.clock.run_for(15000);assert completions(p)==0
+  assert status(p)['lastEvent']=='manual-stop';p.close()
+ check('Current UI shared send-stop button suppresses manual-stop notification',current_stopped)
+ def current_svg():
+  p=current_page();p.click('#current-submit');p.clock.run_for(500)
+  p.evaluate("""() => {
+   const response=document.querySelector('[data-conversation-transcript]').lastElementChild.querySelector('[data-assistant-markdown-root]');
+   response.innerHTML='<svg width="280" height="160"><path d="M 20 120 L 140 20 L 260 120 Z" fill="teal"/></svg>';
+  }""")
+  p.clock.run_for(8000);assert completions(p)==0
+  p.evaluate('currentFinish({preserve:true})');p.clock.run_for(7500)
+  assert status(p)['visualOnly'] is True;assert completions(p)==1;p.close()
+ check('Current UI SVG-only answer waits for generation to finish',current_svg)
+ def current_iframe():
+  p=current_page();p.click('#current-submit');p.clock.run_for(500)
+  p.evaluate("""() => {
+   const turn=document.querySelector('[data-conversation-transcript]').lastElementChild;
+   const frame=document.createElement('iframe');frame.width='280';frame.height='160';
+   frame.srcdoc='<html><body><canvas width="250" height="130"></canvas></body></html>';
+   turn.append(frame);currentFinish({preserve:true});
+  }""")
+  p.clock.run_for(7500);s=status(p)
+  assert s['hasOutput'] is True and s['visualOnly'] is True,s
+  assert completions(p)==1
+  p.clock.run_for(10000);assert completions(p)==1;p.close()
+ check('Current UI sibling iframe with empty markdown emits one completion',current_iframe)
+ def current_late_completion_marker():
+  p=current_page();p.click('#current-submit');p.clock.run_for(500)
+  p.evaluate('currentFinish({mark:false})');p.clock.run_for(12000);s=status(p)
+  assert s['busy'] is False and s['hasOutput'] is True and s['finalControls'] is True,s
+  assert completions(p)==0;assert s['phase']=='waiting',s
+  p.evaluate("document.querySelector('[data-conversation-transcript]').lastElementChild.setAttribute('data-message-complete','')")
+  p.clock.run_for(4000);assert completions(p)==0
+  p.clock.run_for(3500);assert completions(p)==1;p.close()
+ check('Current UI waits a full settling interval after a late completion marker',current_late_completion_marker)
+ def current_form_busy():
+  p=current_page();p.click('#current-submit');p.clock.run_for(500)
+  p.evaluate("""() => {
+   currentToken('Still generating with the form marker');
+   const button=document.querySelector('[data-composer-submit]');
+   button.removeAttribute('data-stop-generating');button.type='submit';
+   button.setAttribute('aria-label','メッセージを送信します');
+  }""")
+  p.clock.run_for(10000);assert status(p)['busy'] is True;assert completions(p)==0
+  p.evaluate('currentFinish()');p.clock.run_for(7500);assert completions(p)==1;p.close()
+ check('Current UI submitting form alone keeps generation active',current_form_busy)
+ def current_scan_retry():
+  p=current_page();before=status(p)
+  p.evaluate("""() => {
+   window.originalQuerySelector=document.querySelector;
+   document.querySelector=function(selector) {
+    if (selector==='[data-conversation-transcript]') throw new Error('Synthetic transient DOM failure');
+    return window.originalQuerySelector.call(this,selector);
+   };
+  }""")
+  p.clock.run_for(1600);failed=status(p)
+  assert failed['scanError'] is True and failed['lastEvent']=='snapshot-retry',failed
+  assert failed['scanAttemptAt']>before['sampledAt'],failed
+  assert failed['sampledAt']==before['sampledAt'],failed
+  p.evaluate('document.querySelector=window.originalQuerySelector;delete window.originalQuerySelector')
+  p.clock.run_for(1600);recovered=status(p)
+  assert recovered['scanError'] is False and recovered['composerFound'] is True,recovered
+  assert recovered['sampledAt']>failed['sampledAt'];assert completions(p)==0;p.close()
+ check('Current UI reports a transient scan error and recovers on the next scan',current_scan_retry)
+ def popup_page(content_status=None):
   p=context.new_page();errors=[];p.on('pageerror',lambda e:errors.append(str(e)))
   html=(ROOT/'popup.html').read_text(encoding='utf-8')
   html=re.sub(r'<script src="[^"]+"></script>','',html)
   html=html.replace('<link rel="stylesheet" href="popup.css">','<style>'+(ROOT/'popup.css').read_text()+'</style>')
   icon=base64.b64encode((ROOT/'assets/icon48.png').read_bytes()).decode()
   html=html.replace('assets/icon48.png','data:image/png;base64,'+icon)
-  p.set_content(html);p.evaluate(MOCK);inject(p,'shared.js');inject(p,'popup.js');p.wait_for_timeout(150)
+  p.set_content(html);p.evaluate(MOCK)
+  if content_status is not None:p.evaluate('(value)=>{chrome.tabs.sendMessage=async()=>value}',content_status)
+  inject(p,'shared.js');inject(p,'popup.js');p.wait_for_timeout(150)
+  return p,errors
+ def popup():
+  p,errors=popup_page()
   assert p.locator('#enabled').is_checked();assert p.locator('#tabStatus').inner_text()=='接続済み・待機中'
   p.click('#testNotification');p.wait_for_timeout(150);assert '成功' in p.locator('#testResult').inner_text()
   assert not errors,errors
   if args.screenshot:p.screenshot(path=args.screenshot,full_page=True)
   p.close()
  check('Popup layout, defaults and test-button wiring (mocked APIs)',popup)
+ def popup_status(content_status,expected):
+  p,errors=popup_page(content_status)
+  assert p.locator('#tabStatus').inner_text()==expected
+  assert not errors,errors;p.close()
+ popup_cases=[
+  ('Popup reports a missing composer instead of connected idle',
+   {'ok':True,'phase':'idle','enabled':True,'composerFound':False},'ChatGPT の入力欄を検出できません'),
+  ('Popup accepts a new conversation with no assistant message',
+   {'ok':True,'phase':'idle','enabled':True,'composerFound':True,'assistantFound':False},'接続済み・待機中'),
+  ('Popup preserves the disabled state when the composer is absent',
+   {'ok':True,'phase':'disabled','enabled':False,'composerFound':False},'通知は一時停止中'),
+  ('Popup prioritizes scan failure over a missing composer',
+   {'ok':True,'phase':'idle','enabled':True,'composerFound':False,'scanError':True},'画面の読み取りを再試行中'),
+  ('Popup tolerates older content diagnostics without composerFound',
+   {'ok':True,'phase':'idle','enabled':True},'接続済み・待機中')
+ ]
+ for name,content_status,expected in popup_cases:
+  check(name,lambda content_status=content_status,expected=expected:popup_status(content_status,expected))
+ def popup_version():
+  p,errors=popup_page();diagnostic=json.loads(p.locator('#diagnostics').text_content())
+  assert diagnostic['extension']=='1.0.2';assert not errors,errors;p.close()
+ check('Popup diagnostics reports the manifest version 1.0.2',popup_version)
  report={'browser':browser.version,'test_type':'Offline fixture with mock Chrome APIs; NO native extension installation, Windows banner, or logged-in ChatGPT verification','results':results}
  if args.report:Path(args.report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
  browser.close()

@@ -126,7 +126,8 @@
       // Fast replies without an observed stop button require both the composer
       // and final answer controls. Visual-only replies also require both: an
       // embedded preview can exist long before the parent answer finishes.
-      const ready = run.sawBusy && !s.visualOnly ? (s.composerReady || s.finalControls) : (s.composerReady && s.finalControls);
+      const readySignal = run.sawBusy && !s.visualOnly ? (s.composerReady || s.finalControls) : (s.composerReady && s.finalControls);
+      const ready = readySignal && (!s.completionRequired || s.completionMarked);
       const hasCurrentOutput = s.hasOutput && s.afterUser && run.sawOutput;
       if (hasCurrentOutput && ready) {
         if (run.readySince === null) run.readySince = now;

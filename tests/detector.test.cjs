@@ -130,6 +130,34 @@ test("visible error ends the run without a success notification", () => {
   const d=fresh();const s=stream(d);d.tick(s,3100);
   assert.equal(completes(d.tick({...done(s),error:true},4000)).length,0);assert.equal(d.phase,"error");
 });
+
+test("current UI waits for its explicit completion marker even after Stop disappears", () => {
+  const d=fresh();const s={...stream(d),completionRequired:true,completionMarked:false};d.tick(s,3100);
+  const pending=done(s);
+  for(const at of [4000,10000,60000]) {
+    assert.equal(completes(d.tick(pending,at)).length,0);
+    assert.equal(d.phase,"waiting");
+  }
+  const ready={...pending,completionMarked:true};d.tick(ready,61000);
+  assert.equal(completes(d.tick(ready,65999)).length,0);
+  assert.equal(completes(d.tick(ready,66000)).length,1);
+  assert.equal(completes(d.tick(ready,80000)).length,0);
+});
+
+test("removing the explicit completion marker restarts the settling interval", () => {
+  const d=fresh();const s={...stream(d),completionRequired:true,completionMarked:false};d.tick(s,3100);
+  const ready={...done(s),completionMarked:true};d.tick(ready,4000);
+  d.tick({...ready,completionMarked:false},8000);d.tick(ready,10000);
+  assert.equal(completes(d.tick(ready,14999)).length,0);
+  assert.equal(completes(d.tick(ready,15000)).length,1);
+});
+
+test("an explicit completion marker cannot substitute for current answer output", () => {
+  const d=fresh();const s={...stream(d),completionRequired:true,completionMarked:false,hasOutput:false};d.tick(s,3100);
+  const empty={...done(s),completionMarked:true};
+  for(const at of [4000,10000,60000]) assert.equal(completes(d.tick(empty,at)).length,0);
+  assert.equal(d.phase,"waiting");
+});
 test("disabled detector neither starts nor completes", () => {
   const d=fresh({enabled:false});const s=stream(d);d.tick(s,3100);d.tick(done(s),4000);
   assert.equal(completes(d.tick(done(s),20000)).length,0);assert.equal(d.phase,"disabled");

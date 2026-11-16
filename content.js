@@ -4,16 +4,19 @@
   if (globalThis.__cgnLoaded) return;
   globalThis.__cgnLoaded = true;
   const { settings: sanitizeSettings } = CGN;
-  const STOP_SELECTOR = 'button[data-testid="stop-button"],button[data-testid="stop-generation-button"],button[data-testid="stop-response-button"]';
-  const SEND_SELECTOR = 'button[data-testid="send-button"],button[data-testid="composer-send-button"]';
+  const VERSION = chrome.runtime.getManifest().version;
+  const COMPOSER_SELECTOR = '#prompt-textarea,[data-testid="prompt-textarea"],textarea[name="prompt-textarea"],#mobile-composer-prompt,textarea[data-mobile-composer-prompt]';
+  const STOP_SELECTOR = 'button[data-testid="stop-button"],button[data-testid="stop-generation-button"],button[data-testid="stop-response-button"],button[data-stop-generating]';
+  const SEND_SELECTOR = 'button[data-testid="send-button"],button[data-testid="composer-send-button"],button[data-composer-submit]:not([data-stop-generating])';
   const STREAM_SELECTOR = '.result-streaming,[data-is-streaming="true"],[data-is-generating="true"]';
+  const CURRENT_STREAM_SELECTOR = '[data-assistant-markdown] [aria-busy="true"]';
   const STOP_LABEL = /^(?:stop(?: generating| generation| streaming| response)?|生成を停止|生成を中止|応答を停止|回答を停止|回答の生成を停止|停止する|停止)$/i;
-  const SEND_LABEL = /^(?:send(?: prompt| message)?|送信|メッセージを送信|プロンプトを送信)$/i;
-  const FINAL_LABEL = /^(?:copy(?: response| message)?|good response|bad response|read aloud|コピー|回答をコピー|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
-  const FINAL_VISUAL_LABEL = /^(?:copy (?:response|message)|good response|bad response|read aloud|回答をコピー|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
+  const SEND_LABEL = /^(?:send(?: prompt| message)?|送信|メッセージを送信(?:します)?|プロンプトを送信)$/i;
+  const FINAL_LABEL = /^(?:copy(?: response| message)?|good response|bad response|read aloud|コピー|回答をコピー(?:する)?|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
+  const FINAL_VISUAL_LABEL = /^(?:copy (?:response|message)|good response|bad response|read aloud|回答をコピー(?:する)?|メッセージをコピー|良い回答|悪い回答|読み上げる)$/i;
   const REGEN_LABEL = /^(?:regenerate(?: response)?|try again|再生成|回答を再生成|もう一度試す)$/i;
-  const TURN_SELECTOR = 'article,[data-testid^="conversation-turn-"]';
-  const NON_OUTPUT_SELECTOR = 'button,[role="button"],script,style,template,[hidden],[aria-hidden="true"]';
+  const TURN_SELECTOR = 'article,[data-testid^="conversation-turn-"],[data-message-role]';
+  const NON_OUTPUT_SELECTOR = 'button,[role="button"],script,style,template,[hidden],[aria-hidden="true"],[data-message-attribution],[data-message-actions]';
   let prefs = sanitizeSettings();
   const detector = new CgnCompletionDetector(prefs);
   const documentId = crypto.randomUUID();
@@ -52,17 +55,17 @@
     return `${text.length}:${hash >>> 0}`;
   }
   function composer() {
-    return document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],textarea[name="prompt-textarea"]');
+    return [...document.querySelectorAll(COMPOSER_SELECTOR)].find(visible) || null;
   }
   function latestMessage(scope, role) {
     // Mix both formats in document order: older text replies must not hide a
     // newer tool/visual turn which only exposes data-turn.
-    const matches = scope.querySelectorAll(`[data-message-author-role="${role}"],article[data-turn="${role}"],[data-testid^="conversation-turn-"][data-turn="${role}"]`);
+    const matches = scope.querySelectorAll(`[data-message-author-role="${role}"],[data-message-role="${role}"],article[data-turn="${role}"],[data-testid^="conversation-turn-"][data-turn="${role}"]`);
     return matches[matches.length - 1] || null;
   }
   function responseText(assistant) {
     if (!assistant) return "";
-    const copy = assistant.cloneNode(true);
+    const copy = (assistant.querySelector('[data-assistant-markdown]') || assistant).cloneNode(true);
     // A fallback assistant can itself be the article. Its action labels and
     // SVG labels are not prose and must not turn an empty reply into output.
     copy.querySelectorAll(`${NON_OUTPUT_SELECTOR},svg,iframe,canvas,video,audio`).forEach(el => el.remove());
@@ -72,7 +75,7 @@
     if (!turn) return [];
     return [...turn.querySelectorAll("img,video,audio,canvas,svg,iframe")].filter(el => {
       if (!visible(el) || el.closest('script,style,template,[hidden],[aria-hidden="true"]')
-          || el.closest('[data-message-author-role="user"],[data-turn="user"]')) return false;
+          || el.closest('[data-message-author-role="user"],[data-message-role="user"],[data-turn="user"]')) return false;
       const owner = el.closest(TURN_SELECTOR);
       if (owner && owner !== turn) return false;
       const tag = el.tagName.toLowerCase();
@@ -96,19 +99,31 @@
     });
   }
   function snapshot() {
-    const scope = document.querySelector("main") || document;
+    const transcript = document.querySelector('[data-conversation-transcript]');
+    const scope = transcript || document.querySelector('main[data-slot="conversation"]') || document.querySelector("main") || document;
     const assistant = latestMessage(scope, "assistant");
     const user = latestMessage(scope, "user");
     const turn = assistant?.closest(TURN_SELECTOR) || assistant;
+    // Current transcript turns expose an explicit completion attribute. An
+    // enabled composer or temporarily missing Stop button is not enough there.
+    const completionRequired = Boolean(turn?.matches('[data-message-role="assistant"]'));
+    const completionMarked = completionRequired && turn.hasAttribute('data-message-complete');
     const editor = composer();
     // Restrict language fallbacks to the composer area, never arbitrary response prose.
     const editorArea = editor?.closest('form,[data-type="unified-composer"]') || editor?.parentElement?.parentElement;
     const explicitStop = [...document.querySelectorAll(STOP_SELECTOR)].some(visible);
     const labelledStop = editorArea ? [...editorArea.querySelectorAll('button[aria-label],button[title]')]
       .some(button => visible(button) && labelled(button, STOP_LABEL)) : false;
-    const streaming = Boolean(turn && (turn.matches(STREAM_SELECTOR) || turn.querySelector(STREAM_SELECTOR)))
+    // Loading widgets inside an old completed answer do not start a new run.
+    // The current UI's generic aria-busy signal belongs only to the latest,
+    // unfinished assistant turn; Stop and form-submission signals stay global.
+    const currentStreaming = completionRequired && !completionMarked
+      && [...turn.querySelectorAll(CURRENT_STREAM_SELECTOR)].some(visible);
+    const streaming = currentStreaming
+      || Boolean(turn && (turn.matches(STREAM_SELECTOR) || turn.querySelector(STREAM_SELECTOR)))
       || [...scope.querySelectorAll(STREAM_SELECTOR)].some(visible);
-    const busy = explicitStop || labelledStop || streaming;
+    const submitting = Boolean(editorArea?.matches('form[data-mobile-composer][data-octane-followup-submitting]'));
+    const busy = explicitStop || labelledStop || streaming || submitting;
     // Visual results may be siblings of the text node within the same answer.
     // Never read iframe documents or transmit prose, markup, media URLs or hashes.
     const text = responseText(assistant);
@@ -120,6 +135,7 @@
     const afterUser = Boolean(assistant && (!user || (user.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING)));
     const finalControls = Boolean(turn && [...turn.querySelectorAll("button")].some(button => visible(button) && (
       button.matches('[data-testid="copy-turn-action-button"],[data-testid="good-response-turn-action-button"],[data-testid="bad-response-turn-action-button"]')
+      || (button.matches('[data-copy-message]') && button.closest('[data-assistant-message-actions]'))
       || labelled(button, visualOnly ? FINAL_VISUAL_LABEL : FINAL_LABEL)
     )));
     const error = Boolean(turn?.querySelector('[data-testid="conversation-turn-error"],[data-testid="regenerate-thread-error-button"],[role="alert"]'));
@@ -130,10 +146,13 @@
       userKey: nodeKey(user), assistantKey: nodeKey(assistant), signature,
       hasOutput: hasTextOutput || mediaElements.length > 0, afterUser, busy,
       composerReady: editorReady && !busy, finalControls, error,
+      completionRequired, completionMarked,
       hasTextOutput, visualOnly, mediaCount: mediaElements.length,
       mediaKinds: [...new Set(mediaElements.map(el => el.tagName.toLowerCase()))],
       stopDetected: explicitStop || labelledStop, streamingDetected: streaming,
-      assistantFound: Boolean(assistant), composerFound: Boolean(editor)
+      assistantFound: Boolean(assistant), userFound: Boolean(user), composerFound: Boolean(editor),
+      uiDetected: Boolean(editor),
+      uiVariant: transcript || editor?.matches('#mobile-composer-prompt,[data-mobile-composer-prompt]') ? "current" : editor ? "legacy" : "unknown"
     };
   }
   function dispose() {
@@ -153,16 +172,19 @@
   }
   function buildStatus(s) {
     return {
-      version: "1.0.1", phase: detector.phase, enabled: prefs.enabled,
+      version: VERSION, phase: detector.phase, enabled: prefs.enabled,
       stopDetected: s.stopDetected, streamingDetected: s.streamingDetected,
       assistantFound: s.assistantFound, hasOutput: s.hasOutput,
       finalControls: s.finalControls, composerFound: s.composerFound,
       hasTextOutput: s.hasTextOutput, visualOnly: s.visualOnly,
       mediaCount: s.mediaCount, mediaKinds: s.mediaKinds,
       afterUser: s.afterUser, composerReady: s.composerReady,
+      userFound: s.userFound, uiDetected: s.uiDetected, uiVariant: s.uiVariant,
+      completionRequired: s.completionRequired, completionMarked: s.completionMarked,
       sawBusy: detector.status().sawBusy,
       busy: s.busy, active: Boolean(detector.run), lastEvent,
-      sampledAt: Date.now()
+      documentReady: document.readyState, scanError: false,
+      sampledAt: Date.now(), scanAttemptAt: Date.now()
     };
   }
   function handle(events, s) {
@@ -191,6 +213,8 @@
     } catch {
       // A transitioning DOM must not break monitoring. The next mutation retries.
       lastEvent = "snapshot-retry";
+      lastStatus = { ...lastStatus, version: VERSION, phase: detector.phase, enabled: prefs.enabled,
+        scanError: true, lastEvent, documentReady: document.readyState, scanAttemptAt: Date.now() };
     }
   }
   function schedule(delay = 250) {
@@ -266,7 +290,7 @@
     detector.configure(prefs, Date.now());
     observer.observe(document.documentElement, {
       childList: true, subtree: true, characterData: true, attributes: true,
-      attributeFilter: ["class", "style", "hidden", "aria-label", "aria-busy", "aria-hidden", "data-testid", "data-message-author-role", "data-turn", "data-is-streaming", "data-is-generating", "disabled", "src", "srcdoc", "width", "height", "d", "points", "viewBox", "transform"]
+      attributeFilter: ["class", "style", "hidden", "aria-label", "aria-busy", "aria-hidden", "aria-disabled", "data-testid", "data-message-author-role", "data-message-role", "data-message-complete", "data-stop-generating", "data-octane-followup-submitting", "data-turn", "data-is-streaming", "data-is-generating", "disabled", "src", "srcdoc", "width", "height", "d", "points", "viewBox", "transform"]
     });
     scan();
     // Backup scan for missed attribute changes and SPA URLs. Background tabs can

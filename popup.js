@@ -1,5 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
+const VERSION = chrome.runtime.getManifest().version;
 const BOOL_IDS = ["enabled", "notifyWhenFocused", "sound", "keepVisible"];
 const PHASES = {
   idle: ["接続済み・待機中", "このタブで次に生成する回答を監視します。"],
@@ -48,7 +49,14 @@ async function refresh() {
     if (tabId !== undefined) {
       try {
         contentStatus = await chrome.tabs.sendMessage(tabId, { target: "content", type: "get-status" });
-        const [title, hint] = PHASES[contentStatus?.phase] || ["状態を確認できません", "ChatGPT のタブを再読み込みしてください。"];
+        let [title, hint] = PHASES[contentStatus?.phase] || ["状態を確認できません", "ChatGPT のタブを再読み込みしてください。"];
+        if (contentStatus?.scanError === true) {
+          title = "画面の読み取りを再試行中";
+          hint = "ChatGPT の画面の読み込みが終わるまでお待ちください。再読み込みしても続く場合は、診断情報を送ってください。";
+        } else if (contentStatus?.enabled !== false && contentStatus?.composerFound === false) {
+          title = "ChatGPT の入力欄を検出できません";
+          hint = "ChatGPT にログインし、画面の読み込みが終わっているか確認してください。再読み込みしても続く場合は、診断情報を送ってください。";
+        }
         $("tabStatus").textContent = title; $("tabHint").textContent = hint;
       } catch {
         contentStatus = { connected: false };
@@ -64,7 +72,7 @@ async function refresh() {
     $("permission").textContent = diagnostic?.permission === "granted"
       ? "拡張の通知権限：許可（Windows 側は別設定）" : "拡張の通知権限：拒否／取得できませんでした";
     $("diagnostics").textContent = JSON.stringify({
-      extension: "1.0.1", settings: prefs, currentTab: contentStatus,
+      extension: VERSION, settings: prefs, currentTab: contentStatus,
       notificationPermission: diagnostic?.permission, recent: diagnostic?.recent || []
     }, null, 2);
   } catch (error) {

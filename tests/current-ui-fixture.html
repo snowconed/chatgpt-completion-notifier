@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>Synthetic current ChatGPT UI fixture</title></head>
+<body>
+<main data-slot="conversation">
+  <ol data-conversation-transcript>
+    <li data-message-role="user" id="00000000-0000-4000-8000-000000000001">
+      <button type="button" data-user-message-bubble><p data-user-message-copy>Previous fixture prompt</p></button>
+    </li>
+    <li data-message-role="assistant" id="00000000-0000-4000-8000-000000000002" data-assistant-content-started data-message-complete>
+      <div data-assistant-markdown data-assistant-markdown-root>Previous fixture answer</div>
+      <div role="group" data-assistant-message-actions data-message-actions>
+        <button type="button" data-copy-message aria-label="回答をコピーする">Copy</button>
+      </div>
+    </li>
+  </ol>
+</main>
+<footer data-ds-composer>
+  <form data-mobile-composer>
+    <textarea id="mobile-composer-prompt" data-mobile-composer-prompt name="prompt" aria-label="ChatGPT とチャット">Fixture prompt</textarea>
+    <button id="current-submit" data-composer-submit aria-label="メッセージを送信します" type="submit">Send</button>
+  </form>
+</footer>
+<script>
+// Synthetic content only. The attributes mirror the observed current UI;
+// no legacy author-role, conversation-turn or prompt-textarea selectors exist.
+window.fixtureMode = "stream";
+let sequence = 2;
+const transcript = document.querySelector('[data-conversation-transcript]');
+const form = document.querySelector('[data-mobile-composer]');
+const editor = document.querySelector('[data-mobile-composer-prompt]');
+const submit = document.querySelector('[data-composer-submit]');
+const latest = () => transcript.lastElementChild;
+const uuid = () => '00000000-0000-4000-8000-' + String(++sequence).padStart(12, '0');
+
+function finish({ mark = true, actions = true, preserve = false } = {}) {
+  const turn = latest();
+  turn.setAttribute('data-assistant-content-started', '');
+  if (mark) turn.setAttribute('data-message-complete', '');
+  else turn.removeAttribute('data-message-complete');
+  if (!preserve) turn.querySelector('[data-assistant-markdown-root]').textContent = 'Completed fixture answer';
+  turn.querySelector('[data-assistant-message-actions]')?.remove();
+  if (actions) {
+    const group = document.createElement('div');
+    group.setAttribute('role', 'group');
+    group.setAttribute('data-assistant-message-actions', '');
+    group.setAttribute('data-message-actions', '');
+    group.innerHTML = '<button type="button" data-copy-message aria-label="回答をコピーする">Copy</button>';
+    turn.append(group);
+  }
+  form.removeAttribute('data-octane-followup-submitting');
+  submit.removeAttribute('data-stop-generating');
+  submit.type = 'submit';
+  submit.setAttribute('aria-label', 'メッセージを送信します');
+  submit.setAttribute('aria-disabled', 'true');
+  submit.textContent = 'Send';
+  editor.value = '';
+}
+
+function begin() {
+  const user = document.createElement('li');
+  user.setAttribute('data-message-role', 'user');
+  user.id = uuid();
+  user.innerHTML = '<button type="button" data-user-message-bubble><p data-user-message-copy>New fixture prompt</p></button>';
+  transcript.append(user);
+  const assistant = document.createElement('li');
+  assistant.setAttribute('data-message-role', 'assistant');
+  assistant.id = uuid();
+  assistant.innerHTML = '<div data-assistant-markdown data-assistant-markdown-root></div>';
+  transcript.append(assistant);
+  form.setAttribute('data-octane-followup-submitting', '');
+  submit.setAttribute('data-stop-generating', '');
+  submit.removeAttribute('aria-disabled');
+  submit.type = 'button';
+  submit.setAttribute('aria-label', '生成を中止');
+  submit.textContent = 'Stop';
+  if (window.fixtureMode === 'fast') finish();
+}
+
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  if (!form.hasAttribute('data-octane-followup-submitting')) begin();
+});
+submit.addEventListener('click', event => {
+  if (submit.hasAttribute('data-stop-generating')) {
+    // Prevent the same click from submitting again after finish changes type.
+    event.preventDefault();
+    finish({ preserve: true });
+  }
+});
+window.currentFinish = finish;
+window.currentToken = text => {
+  latest().setAttribute('data-assistant-content-started', '');
+  latest().querySelector('[data-assistant-markdown-root]').textContent = text;
+};
+</script>
+</body>
+</html>
